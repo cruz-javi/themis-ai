@@ -11,11 +11,23 @@ class ForecastService:
         t = [point.t for point in ordered]
         votes = [point.votes for point in ordered]
 
-        future_t, predicted = self._model.fit_predict(t, votes, request.horizon)
+        future_t, turnout, congestion, dropoff = self._model.fit_predict(
+            t, votes, request.horizon, request.start_time, request.cap
+        )
 
         projection = [
             SeriesPoint(t=step, votes=value)
-            for step, value in zip(future_t, predicted, strict=True)
+            for step, value in zip(future_t, turnout, strict=True)
+        ]
+        
+        congestion_projection = [
+            SeriesPoint(t=step, votes=value)
+            for step, value in zip(future_t, congestion, strict=True)
+        ]
+        
+        dropoff_projection = [
+            SeriesPoint(t=step, votes=value)
+            for step, value in zip(future_t, dropoff, strict=True)
         ]
 
         projected_total = projection[-1].votes if projection else 0
@@ -24,5 +36,7 @@ class ForecastService:
             election_id=request.election_id,
             model=self._model.name,
             projection=projection,
+            congestion_projection=congestion_projection,
+            dropoff_projection=dropoff_projection,
             projected_total=projected_total,
         )

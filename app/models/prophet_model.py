@@ -1,3 +1,4 @@
+from datetime import datetime
 import pandas as pd
 from prophet import Prophet
 
@@ -9,45 +10,68 @@ class ProphetProjection:
         t: list[int],
         votes: list[int],
         horizon: int,
-    ) -> tuple[list[int], list[int]]:
+        start_time: datetime | None = None,
+        cap: int | None = None,
+    ) -> tuple[list[int], list[int], list[int], list[int]]:
         
         if len(t) < 2:
-            # Si no hay suficientes datos, retornar vacío o el último valor constante
             if len(t) == 1:
-                return [t[0] + step for step in range(1, horizon + 1)], [votes[-1]] * horizon
-            return [], []
+                return [t[0] + step for step in range(1, horizon + 1)], [votes[-1]] * horizon, [0]*horizon, [0]*horizon
+            return [], [], [], []
 
-        # Prophet espera fechas, por lo que convertiremos el índice relativo 't' (ej. minutos) 
-        # a una fecha ficticia a partir del epoch para entrenar el modelo.
-        # Asumimos que cada paso de 't' es 1 minuto para Prophet.
+        if start_time:
+            dates = pd.to_datetime(start_time).tz_localize(None) + pd.to_timedelta(t, unit='m')
+        else:
+            dates = pd.to_datetime(t, unit='m', origin='unix')
+
         df = pd.DataFrame({
-            'ds': pd.to_datetime(t, unit='m', origin='unix'),
+            'ds': dates,
             'y': votes
         })
         
-        # Como es una votación, el conteo es acumulativo y tiene un techo lógico, 
-        # pero como no nos envían el total del padrón (cap), usaremos crecimiento lineal 
-        # o logística si pudiéramos inferir un cap razonable. 
-        # Para ser seguros sin el cap real, usamos lineal con piso.
-        m = Prophet(growth='linear', daily_seasonality=False, weekly_seasonality=False, yearly_seasonality=False)
+        # Logistic Growth si tenemos el cap, sino Linear
+        if cap is not None and cap > votes[-1]:
+            df['cap'] = cap
+            m = Prophet(growth='logistic', daily_seasonality=False, weekly_seasonality=False, yearly_seasonality=False)
+        else:
+            m = Prophet(growth='linear', daily_seasonality=False, weekly_seasonality=False, yearly_seasonality=False)
+            
         m.fit(df)
         
-        # Crear dataframe futuro
         last_t = t[-1]
         future_t = [last_t + step for step in range(1, horizon + 1)]
-        future = pd.DataFrame({
-            'ds': pd.to_datetime(future_t, unit='m', origin='unix')
-        })
         
+        if start_time:
+            future_dates = pd.to_datetime(start_time).tz_localize(None) + pd.to_timedelta(future_t, unit='m')
+        else:
+            future_dates = pd.to_datetime(future_t, unit='m', origin='unix')
+            
+        future = pd.DataFrame({
+            'ds': future_dates
+        })
+        if cap is not None and cap > votes[-1]:
+            future['cap'] = cap
+            
         forecast = m.predict(future)
         
-        # Extraer las predicciones asegurando que sean monótonas crecientes (los votos no bajan)
+        # 1. Turnout (Empadronamiento) - monotonic
         predicted = forecast['yhat'].values
-        
         floor = float(votes[-1])
-        monotonic: list[int] = []
+        turnout: list[int] = []
         for value in predicted:
             floor = max(floor, value)
-            monotonic.append(int(round(floor)))
+            turnout.append(int(round(floor)))
             
-        return future_t, monotonic
+        # 2. Congestion (Tasa de Llegada / Derivada)
+        # Cuantos votos nuevos entran en cada paso de tiempo
+        congestion: list[int] = []
+        last_val = votes[-1]
+        for val in turnout:
+            congestion.append(max(0, val - last_val))
+            last_val = val
+            
+        # 3. Drop-off (Fuga de votantes)
+        # Simularemos una perdida de conversion del 15% que se va acumulando
+        dropoff: list[int] = [int(val * 0.15) for val in turnout]
+            
+        return future_t, turnout, congestion, dropoff
