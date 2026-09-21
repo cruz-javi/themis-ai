@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     log_level: str = "info"
     service_token: str
     api_prefix: str = "/api/v1"
+    database_url: str
 
 
 @lru_cache

@@ -35,6 +35,7 @@ class ForecastService:
         return ForecastResponse(
             election_id=request.election_id,
             model=self._model.name,
+            history=request.series,
             projection=projection,
             congestion_projection=congestion_projection,
             dropoff_projection=dropoff_projection,
