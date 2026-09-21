@@ -1,10 +1,10 @@
-from app.models.baseline import BaselineProjection
+from app.models.prophet_model import ProphetProjection
 from app.schemas.forecast import ForecastRequest, ForecastResponse, SeriesPoint
 
 
 class ForecastService:
-    def __init__(self, model: BaselineProjection | None = None) -> None:
-        self._model = model or BaselineProjection()
+    def __init__(self, model: ProphetProjection | None = None) -> None:
+        self._model = model or ProphetProjection()
 
     def run(self, request: ForecastRequest) -> ForecastResponse:
         ordered = sorted(request.series, key=lambda point: point.t)
