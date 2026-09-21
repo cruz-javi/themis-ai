@@ -8,6 +8,13 @@ class SeriesPoint(BaseModel):
     votes: int = Field(ge=0, description="Conteo acumulado agregado")
 
 
+class SimulateRequest(BaseModel):
+    election_id: str = Field(alias="electionId", min_length=1, max_length=128)
+    num_votes: int = Field(alias="numVotes", default=1500, ge=10, le=10000)
+
+    model_config = {"populate_by_name": True}
+
+
 class ForecastRequest(BaseModel):
     election_id: str = Field(alias="electionId", min_length=1, max_length=128)
     horizon: int = Field(default=5, ge=1, le=100)

@@ -1,12 +1,38 @@
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.security import require_service_token
-from app.schemas.forecast import ForecastRequest, ForecastResponse, SeriesPoint, CandidateProjection
+from app.schemas.forecast import ForecastRequest, ForecastResponse, SeriesPoint, CandidateProjection, SimulateRequest
 from app.services.forecast_service import ForecastService
-from app.db import get_db_connection, get_active_election, calculate_cap, get_registration_series, get_live_tally
+from app.db import get_db_connection, get_active_election, calculate_cap, get_registration_series, get_live_tally, inject_simulation_data
 
 router = APIRouter()
 service = ForecastService()
+
+@router.post(
+    "/simulate",
+    dependencies=[Depends(require_service_token)],
+    summary="Inyecta datos falsos para calibrar IA (CU-12)",
+)
+async def simulate_data(payload: SimulateRequest):
+    conn = await get_db_connection()
+    try:
+        # Si dice "auto", buscamos la eleccion activa
+        election_id = payload.election_id
+        if election_id == "auto":
+            election = await get_active_election(conn)
+            if not election:
+                raise HTTPException(status_code=404, detail="No hay eleccion activa")
+            election_id = election["id"]
+            
+        await inject_simulation_data(conn, election_id, num_votes=payload.num_votes)
+        
+        # Limpiar el cache para forzar lectura fresca
+        global _offline_cache
+        _offline_cache = {}
+        
+        return {"success": True, "message": f"{payload.num_votes} votos inyectados", "electionId": election_id}
+    finally:
+        await conn.close()
 
 
 from typing import Dict, Any

@@ -74,3 +74,77 @@ async def get_live_tally(conn: asyncpg.Connection, election_id: str) -> List[Dic
     """
     rows = await conn.fetch(query, election_id)
     return [dict(row) for row in rows]
+
+import uuid
+import random
+from datetime import datetime, timedelta
+
+async def inject_simulation_data(conn: asyncpg.Connection, election_id: str, num_votes: int = 1500) -> None:
+    # 1. Limpiar datos falsos anteriores de esta eleccion (para que la simulacion sea repetible)
+    await conn.execute("DELETE FROM vote_submissions WHERE election_id = $1", election_id)
+    await conn.execute("DELETE FROM registration_requests WHERE election_id = $1", election_id)
+    
+    # 2. Obtener opciones (candidatos)
+    options = await conn.fetch("SELECT id FROM options WHERE election_id = $1 ORDER BY on_chain_index ASC", election_id)
+    if not options:
+        raise ValueError("No hay opciones configuradas para esta eleccion.")
+    
+    # 3. Generar registros de empadronamiento (Curva S basica o simplemente distribucion en el tiempo)
+    now = datetime.utcnow()
+    start_time = now - timedelta(minutes=180) # Simulamos 3 horas de trafico
+    
+    registration_rows = []
+    vote_rows = []
+    
+    # Distribucion probabilistica para que haya un ganador claro (55%, 30%, 15%...)
+    # Si hay menos o mas opciones, se adapta
+    weights = [0.55, 0.30, 0.15]
+    if len(options) > 3:
+        weights = [0.5, 0.3, 0.1] + [0.1 / (len(options)-3)] * (len(options)-3)
+    elif len(options) < 3:
+        weights = [0.6, 0.4][:len(options)]
+        
+    for i in range(num_votes):
+        # Distribucion de tiempo (concentramos algunos al medio para generar el "Pico de red")
+        # Usamos beta distribution para tener una curva S o gaussiana
+        # random.betavariate(2, 2) da una campana centrada
+        time_offset = random.betavariate(2, 2) * 180 
+        created_at = start_time + timedelta(minutes=time_offset)
+        
+        req_id = str(uuid.uuid4())
+        registration_rows.append((
+            req_id,
+            election_id,
+            str(uuid.uuid4()), # scoped_token_hash (dummy)
+            "blinded_dummy",
+            "INSERTED",
+            created_at
+        ))
+        
+        # Asignar voto a un candidato basado en los pesos
+        chosen_option = random.choices(options, weights=weights, k=1)[0]['id']
+        
+        vote_rows.append((
+            str(uuid.uuid4()),
+            election_id,
+            chosen_option,
+            str(uuid.uuid4()), # nullifier
+            "merkle_dummy",
+            "scope_dummy",
+            "RELAY",
+            created_at + timedelta(seconds=random.randint(5, 60)) # voto emitido poco despues del registro
+        ))
+        
+    # Ordenar por tiempo para la insercion
+    registration_rows.sort(key=lambda x: x[5])
+    
+    # 4. Insertar en bloque (Bulk Insert)
+    await conn.executemany("""
+        INSERT INTO registration_requests (id, election_id, scoped_token_hash, blinded_value, status, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
+    """, registration_rows)
+    
+    await conn.executemany("""
+        INSERT INTO vote_submissions (id, election_id, option_id, nullifier, merkle_tree_root, scope, source, submitted_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    """, vote_rows)
